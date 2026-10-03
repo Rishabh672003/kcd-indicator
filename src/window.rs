@@ -120,6 +120,8 @@ struct Ui {
     files: adw::ActionRow,
     unmount: gtk::Button,
     media: adw::PreferencesGroup,
+    media_card: gtk::Box,
+    no_media: adw::ActionRow,
     art: gtk::Picture,
     art_placeholder: gtk::Image,
     track: gtk::Label,
@@ -260,8 +262,10 @@ impl Ui {
         self.files.set_sensitive(d.connected);
         self.actions.set_sensitive(d.connected);
 
-        let media = d.media.as_ref().filter(|m| d.connected && !m.title.is_empty());
-        self.media.set_visible(media.is_some());
+        let media = d.media.as_ref().filter(|m| !m.title.is_empty());
+        self.media.set_visible(d.connected);
+        self.media_card.set_visible(media.is_some());
+        self.no_media.set_visible(media.is_none());
         if let Some(m) = media {
             self.track.set_label(&m.title);
             let by = [m.artist.as_str(), m.album.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
@@ -463,8 +467,11 @@ fn build(app: &adw::Application) {
     inner.append(&volume_row);
     card.append(&inner);
 
+    let no_media = row("No media playing", "audio-x-generic-symbolic");
+    no_media.add_css_class("dim-label");
     let media = adw::PreferencesGroup::builder().title("Now playing").visible(false).build();
     media.add(&card);
+    media.add(&no_media);
 
     // Actions
     let send_row = row("Send files…", "document-send-symbolic");
@@ -539,6 +546,8 @@ fn build(app: &adw::Application) {
         files,
         unmount: unmount.clone(),
         media,
+        media_card: card,
+        no_media,
         art,
         art_placeholder,
         track,

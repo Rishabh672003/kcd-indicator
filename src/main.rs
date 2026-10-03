@@ -212,7 +212,8 @@ impl ksni::Tray for Indicator {
             if DEBUG.load(Ordering::Relaxed) {
                 cmd.arg("--debug");
             }
-            cmd.spawn().map(drop).map_err(|e| format!("cannot open window: {e}"))
+            // Wait so the exited window is reaped instead of lingering as a zombie.
+            cmd.spawn().and_then(|mut child| child.wait()).map(drop).map_err(|e| format!("cannot open window: {e}"))
         });
     }
 
