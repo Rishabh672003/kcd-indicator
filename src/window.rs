@@ -2,6 +2,9 @@
 //! device. Runs as its own process so the tray stays small; GApplication uniqueness means a second launch
 //! just raises the open window.
 
+pub mod notifications;
+mod sms;
+
 use crate::ipc::{self, Device, Media};
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -27,19 +30,27 @@ const EVENTS: &[&str] = &[
     "sftp.unmounted",
     "share.progress",
     "share.complete",
+    "sms.incoming",
+    "notification",
+    "contacts.updated",
 ];
 
 enum Msg {
     Devices(Result<Vec<Device>, String>),
     Progress { file: String, current: u64, total: u64 },
     Complete { file: String, success: bool, error: String },
+    /// The event subscription is live: safe to send requests answered by events.
+    Ready,
+    Sms(String, sms::Sms),
+    Notification(notifications::Notification),
+    ContactsChanged,
 }
 
-pub fn run() -> glib::ExitCode {
+pub fn run(page: Option<String>) -> glib::ExitCode {
     let app = adw::Application::builder().application_id(APP_ID).build();
-    app.connect_activate(|app| match app.active_window() {
+    app.connect_activate(move |app| match app.active_window() {
         Some(w) => w.present(),
-        None => build(app),
+        None => build(app, page.as_deref()),
     });
     // Our own flags (--window, --debug) are not GApplication options.
     app.run_with_args::<&str>(&[])
@@ -54,11 +65,18 @@ fn spawn_watcher(tx: async_channel::Sender<Msg>) {
             if tx.send_blocking(Msg::Devices(ipc::devices())).is_err() {
                 return;
             }
-            let err = ipc::watch(EVENTS, |ev| {
+            let ready = tx.clone();
+            let err = ipc::watch(EVENTS, move || drop(ready.send_blocking(Msg::Ready)), |ev| {
                 backoff = 1;
                 let p = &ev.payload;
                 let file = p["file"].as_str().unwrap_or_default().to_string();
                 let msg = match ev.kind.as_str() {
+                    "sms.incoming" => match serde_json::from_value(ev.payload.clone()) {
+                        Ok(sms) => Msg::Sms(ev.device_id.clone(), sms),
+                        Err(e) => return log!("unreadable sms event: {e}"),
+                    },
+                    "notification" => Msg::Notification(notifications::Notification::from_event(&ev.device_id, p)),
+                    "contacts.updated" => Msg::ContactsChanged,
                     "share.progress" => Msg::Progress {
                         file,
                         current: p["current"].as_u64().unwrap_or(0),
@@ -135,6 +153,8 @@ struct Ui {
     volume: gtk::Scale,
     actions: adw::PreferencesGroup,
     transfers: adw::PreferencesGroup,
+    sms: sms::Page,
+    notifications: notifications::Page,
     state: Rc<RefCell<State>>,
 }
 
@@ -153,6 +173,19 @@ fn fmt_time(ms: i64) -> String {
     format!("{}:{:02}", s / 60, s % 60)
 }
 
+/// "14:05" today, "3 Oct" this year, "3 Oct 2024" before that.
+fn fmt_when(ms: i64) -> String {
+    let (Ok(t), Ok(now)) = (glib::DateTime::from_unix_local(ms / 1000), glib::DateTime::now_local()) else { return String::new() };
+    let fmt = if (t.year(), t.day_of_year()) == (now.year(), now.day_of_year()) {
+        "%H:%M"
+    } else if t.year() == now.year() {
+        "%-d %b"
+    } else {
+        "%-d %b %Y"
+    };
+    t.format(fmt).map(String::from).unwrap_or_default()
+}
+
 fn fmt_bytes(b: u64) -> String {
     match b {
         b if b >= 1 << 30 => format!("{:.1} GB", b as f64 / f64::from(1 << 30)),
@@ -161,8 +194,18 @@ fn fmt_bytes(b: u64) -> String {
     }
 }
 
+/// An ActionRow showing `title` and `subtitle` as plain text. Markup must be off *before* the text is set
+/// (builder property order isn't guaranteed), or text with `&` or `<` renders blank.
+pub(crate) fn plain_row(title: &str, subtitle: &str) -> adw::ActionRow {
+    let row = adw::ActionRow::new();
+    row.set_use_markup(false);
+    row.set_title(title);
+    row.set_subtitle(subtitle);
+    row
+}
+
 fn row(title: &str, icon: &str) -> adw::ActionRow {
-    let row = adw::ActionRow::builder().title(title).build();
+    let row = plain_row(title, "");
     row.add_prefix(&gtk::Image::from_icon_name(icon));
     row
 }
@@ -339,6 +382,18 @@ impl Ui {
                 self.sync_picker();
             }
             Msg::Devices(Err(e)) => self.state.borrow_mut().problem = Some(e),
+            Msg::Ready => {
+                self.device_changed();
+                return;
+            }
+            Msg::Sms(device, sms) => {
+                if self.state.borrow().selected.as_deref() == Some(&device) {
+                    self.sms.add(sms);
+                }
+                return;
+            }
+            Msg::Notification(n) => return self.notifications.push(n, self),
+            Msg::ContactsChanged => return self.load_contacts(),
             Msg::Progress { file, current, total } => {
                 let (row, bar) = self.transfer_row(&file);
                 row.set_subtitle(&format!("{} of {}", fmt_bytes(current), fmt_bytes(total)));
@@ -354,6 +409,27 @@ impl Ui {
             }
         }
         self.render();
+    }
+
+    /// (Re)load the per-device pages: on first subscribe, reconnects and when the user picks another phone.
+    fn device_changed(&self) {
+        self.sms.reset();
+        if self.state.borrow().device().is_some_and(|d| d.connected) {
+            self.sms.request_list(self);
+        }
+        self.load_contacts();
+        self.notifications.render(self);
+    }
+
+    fn load_contacts(&self) {
+        let Some(id) = self.state.borrow().selected.clone() else { return };
+        let ui = self.clone();
+        glib::spawn_future_local(async move {
+            let res = gio::spawn_blocking(move || ipc::call("contacts_list", json!({ "deviceId": id }))).await;
+            if let Ok(Ok(contacts)) = res {
+                ui.sms.set_contacts(&contacts);
+            }
+        });
     }
 
     fn transfer_row(&self, file: &str) -> (adw::ActionRow, gtk::ProgressBar) {
@@ -372,7 +448,7 @@ impl Ui {
     }
 }
 
-fn build(app: &adw::Application) {
+fn build(app: &adw::Application, page: Option<&str>) {
     // Status
     let battery_icon = gtk::Image::from_icon_name("battery-missing-symbolic");
     let battery = adw::ActionRow::builder().title("Battery").build();
@@ -500,9 +576,16 @@ fn build(app: &adw::Application) {
         .child(&adw::Clamp::builder().maximum_size(860).child(&content).build())
         .build();
 
+    let sms = sms::Page::new();
+    let notifications = notifications::Page::new();
+    let views = adw::ViewStack::new();
+    views.add_titled_with_icon(&scrolled, Some("device"), "Device", "phone-symbolic");
+    views.add_titled_with_icon(&sms.root, Some("messages"), "Messages", "chat-message-new-symbolic");
+    views.add_titled_with_icon(&notifications.root, Some("notifications"), "Notifications", "preferences-system-notifications-symbolic");
+
     let empty = adw::StatusPage::builder().icon_name("phone-symbolic").title("Connecting to kcd…").build();
     let stack = gtk::Stack::new();
-    stack.add_named(&scrolled, Some("device"));
+    stack.add_named(&views, Some("device"));
     stack.add_named(&empty, Some("empty"));
     stack.set_visible_child_name("empty");
 
@@ -515,8 +598,9 @@ fn build(app: &adw::Application) {
     menu.append(Some("Unpair…"), Some("win.unpair"));
     let menu_button = gtk::MenuButton::builder().icon_name("open-menu-symbolic").tooltip_text("Device menu").menu_model(&menu).build();
     let header = adw::HeaderBar::new();
-    header.set_title_widget(Some(&title));
+    header.set_title_widget(Some(&adw::ViewSwitcher::builder().stack(&views).policy(adw::ViewSwitcherPolicy::Wide).build()));
     header.pack_start(&picker);
+    header.pack_start(&title);
     header.pack_end(&menu_button);
 
     let toolbar = adw::ToolbarView::new();
@@ -561,16 +645,28 @@ fn build(app: &adw::Application) {
         volume: volume.clone(),
         actions,
         transfers,
+        sms: sms.clone(),
+        notifications: notifications.clone(),
         state: Rc::default(),
     };
+    sms.connect(&ui);
+    notifications.connect(&ui);
+
+    let css = gtk::CssProvider::new();
+    css.load_from_string(
+        ".sms-bubble { padding: 8px 12px; border-radius: 14px; background: alpha(currentColor, 0.08); }
+         .sms-sent { background: @accent_bg_color; color: @accent_fg_color; }",
+    );
+    gtk::style_context_add_provider_for_display(&gtk::prelude::WidgetExt::display(&window), &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
 
     // Wiring
     let u = ui.clone();
     picker.connect_selected_notify(move |p| {
         let id = u.state.borrow().listed.get(p.selected() as usize).cloned();
-        if id.is_some() {
+        if id.is_some() && id != u.state.borrow().selected {
             u.state.borrow_mut().selected = id;
             u.render();
+            u.device_changed();
         }
     });
     // kcd opens the file manager itself after mounting ([sftp] auto_open).
@@ -684,6 +780,9 @@ fn build(app: &adw::Application) {
         }
     });
 
+    if let Some(page) = page {
+        views.set_visible_child_name(page);
+    }
     window.present();
 }
 

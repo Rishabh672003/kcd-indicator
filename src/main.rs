@@ -44,6 +44,7 @@ const WATCHED: &[&str] = &[
     "mpris.update",
     "sftp.mounted",
     "sftp.unmounted",
+    "notification",
 ];
 
 #[derive(Default)]
@@ -292,6 +293,14 @@ fn on_event(tray: &ksni::blocking::Handle<Indicator>, ev: ipc::Event) {
             notify(&format!("{name} wants to pair"), &format!("Verification key: {key}\nAccept from the tray menu."));
             tray.update(|t| t.pair_keys.insert(ev.device_id.clone(), key));
         }
+        // Recorded for the window's notification list; kcd itself keeps no history.
+        "notification" => {
+            let n = window::notifications::Notification::from_event(&ev.device_id, &ev.payload);
+            if let Err(e) = window::notifications::record(n) {
+                log!("cannot record notification: {e}");
+            }
+            return;
+        }
         "pair.accepted" | "pair.rejected" => {
             tray.update(|t| t.pair_keys.remove(&ev.device_id));
         }
@@ -302,16 +311,17 @@ fn on_event(tray: &ksni::blocking::Handle<Indicator>, ev: ipc::Event) {
     refresh(tray);
 }
 
-const USAGE: &str = "usage: kcd-indicator [--debug] [--window]\n  --debug, -d   log IPC traffic and events to stderr (or set KCD_INDICATOR_DEBUG=1)\n  --window      open the device window (left-clicking the tray icon does this)";
+const USAGE: &str = "usage: kcd-indicator [--debug] [--window [PAGE]]\n  --debug, -d      log IPC traffic and events to stderr (or set KCD_INDICATOR_DEBUG=1)\n  --window [PAGE]  open the device window (left-clicking the tray icon does this);\n                   PAGE is device, messages or notifications";
 
 fn main() {
     LazyLock::force(&START);
     let env_debug = std::env::var("KCD_INDICATOR_DEBUG").is_ok_and(|v| !v.is_empty() && v != "0");
-    let mut open_window = false;
-    for arg in std::env::args().skip(1) {
+    let mut open_window = None;
+    let mut args = std::env::args().skip(1).peekable();
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--debug" | "-d" => DEBUG.store(true, Ordering::Relaxed),
-            "--window" => open_window = true,
+            "--window" => open_window = Some(args.next_if(|a| !a.starts_with('-'))),
             "--help" | "-h" => return println!("{USAGE}"),
             _ => {
                 eprintln!("unknown argument: {arg}\n{USAGE}");
@@ -322,8 +332,8 @@ fn main() {
     if env_debug {
         DEBUG.store(true, Ordering::Relaxed);
     }
-    if open_window {
-        std::process::exit(match window::run() {
+    if let Some(page) = open_window {
+        std::process::exit(match window::run(page) {
             gtk::glib::ExitCode::SUCCESS => 0,
             _ => 1,
         });
@@ -350,7 +360,7 @@ fn main() {
     let mut backoff = 1;
     loop {
         debug!("watch: connecting");
-        let err = ipc::watch(WATCHED, |ev| {
+        let err = ipc::watch(WATCHED, || {}, |ev| {
             backoff = 1;
             on_event(&tray, ev);
         })

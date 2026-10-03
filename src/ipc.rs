@@ -124,10 +124,12 @@ pub fn devices() -> Result<Vec<Device>, String> {
     serde_json::from_value(call("devices", Value::Null)?).map_err(|e| e.to_string())
 }
 
-/// Blocks, calling `on_event` for each event until the stream breaks.
-pub fn watch(events: &[&str], mut on_event: impl FnMut(Event)) -> Result<(), String> {
+/// Blocks, calling `on_event` for each event until the stream breaks. `on_ready` runs once the
+/// subscription is live, so requests whose replies arrive as events can't race it.
+pub fn watch(events: &[&str], on_ready: impl FnOnce(), mut on_event: impl FnMut(Event)) -> Result<(), String> {
     let mut r = send("watch", json!({ "events": events }))?;
     read_response(&mut r)?; // ack line
+    on_ready();
     for line in r.lines() {
         let line = line.map_err(|e| e.to_string())?;
         debug!("event: {line}");
