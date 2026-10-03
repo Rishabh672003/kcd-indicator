@@ -700,9 +700,18 @@ fn build(app: &adw::Application, page: Option<&str>) {
         u.elapsed.set_label(&fmt_time(target as i64));
         let u = u.clone();
         glib::timeout_add_local_once(Duration::from_millis(250), move || {
-            if u.state.borrow().seek_gen != generation {
+            let mut st = u.state.borrow_mut();
+            if st.seek_gen != generation {
                 return;
             }
+            // kcd emits no event for a position change after a seek, so assume it landed; the next real
+            // update from the phone overrides this.
+            let id = st.selected.clone().unwrap_or_default();
+            if let Some(m) = st.devices.iter_mut().find(|d| d.id == id).and_then(|d| d.media.as_mut()) {
+                m.pos = target as i64;
+                m.pos_anchor_ms = now_ms();
+            }
+            drop(st);
             // Phones only implement absolute positioning (SetPosition); a relative `seek` is ignored by
             // KDE Connect Android, so send where the knob was dropped. Needs kcd with `setPosition`.
             u.device_call("mpris_action", json!({ "setPosition": target as i64 }), None);
