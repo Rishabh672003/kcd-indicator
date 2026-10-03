@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+adw = { version = "0.9.2", package = "libadwaita", features = ["v1_6"] }
+async-channel = "2.5.0"
+gtk = { version = "0.11.5", package = "gtk4", features = ["v4_14"] }
 ksni = { version = "0.3.6", features = ["blocking"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"

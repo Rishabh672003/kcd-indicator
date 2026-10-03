@@ -20,6 +20,7 @@ pub struct Device {
     pub battery: Option<Battery>,
     pub media: Option<Media>,
     pub sftp: Option<Sftp>,
+    pub signal: Option<Signal>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -33,7 +34,33 @@ pub struct Battery {
 pub struct Media {
     pub title: String,
     pub artist: String,
+    pub album: String,
+    /// `file://` path once kcd has cached the art; empty while pending or absent.
+    pub album_art_url: String,
     pub is_playing: bool,
+    /// Track length and position in ms; `pos` was sampled at `pos_anchor_ms` (Unix ms).
+    pub length: i64,
+    pub pos: i64,
+    pub pos_anchor_ms: i64,
+    pub volume: i64,
+    pub can_seek: bool,
+    pub can_go_next: bool,
+    pub can_go_previous: bool,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Signal {
+    /// Per SIM subscription id.
+    pub signal_strengths: std::collections::BTreeMap<String, SignalStrength>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SignalStrength {
+    pub network_type: String,
+    /// 0 (none) – 4 (full).
+    pub signal_strength: i64,
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]

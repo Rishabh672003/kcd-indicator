@@ -19,6 +19,7 @@ macro_rules! debug {
 
 mod icons;
 mod ipc;
+mod window;
 
 use ipc::Device;
 use ksni::blocking::TrayMethods;
@@ -200,6 +201,19 @@ impl ksni::Tray for Indicator {
         "KDE Connect (kcd)".into()
     }
 
+    /// Left click opens the device window in its own process, keeping GTK out of the tray.
+    fn activate(&mut self, _x: i32, _y: i32) {
+        background(|| {
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            let mut cmd = Command::new(exe);
+            cmd.arg("--window");
+            if DEBUG.load(Ordering::Relaxed) {
+                cmd.arg("--debug");
+            }
+            cmd.spawn().map(drop).map_err(|e| format!("cannot open window: {e}"))
+        });
+    }
+
     fn icon_name(&self) -> String {
         icons::name(&self.devices)
     }
@@ -285,14 +299,16 @@ fn on_event(tray: &ksni::blocking::Handle<Indicator>, ev: ipc::Event) {
     refresh(tray);
 }
 
-const USAGE: &str = "usage: kcd-indicator [--debug]\n  --debug, -d   log IPC traffic and events to stderr (or set KCD_INDICATOR_DEBUG=1)";
+const USAGE: &str = "usage: kcd-indicator [--debug] [--window]\n  --debug, -d   log IPC traffic and events to stderr (or set KCD_INDICATOR_DEBUG=1)\n  --window      open the device window (left-clicking the tray icon does this)";
 
 fn main() {
     LazyLock::force(&START);
     let env_debug = std::env::var("KCD_INDICATOR_DEBUG").is_ok_and(|v| !v.is_empty() && v != "0");
+    let mut open_window = false;
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--debug" | "-d" => DEBUG.store(true, Ordering::Relaxed),
+            "--window" => open_window = true,
             "--help" | "-h" => return println!("{USAGE}"),
             _ => {
                 eprintln!("unknown argument: {arg}\n{USAGE}");
@@ -302,6 +318,12 @@ fn main() {
     }
     if env_debug {
         DEBUG.store(true, Ordering::Relaxed);
+    }
+    if open_window {
+        std::process::exit(match window::run() {
+            gtk::glib::ExitCode::SUCCESS => 0,
+            _ => 1,
+        });
     }
     debug!("kcd-indicator {} starting, socket {}", env!("CARGO_PKG_VERSION"), ipc::socket_path().display());
 
