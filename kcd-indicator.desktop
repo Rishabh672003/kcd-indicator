@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=KDE Connect Indicator (kcd)
+Comment=Tray indicator for the kcd KDE Connect daemon
+Exec=kcd-indicator
+Icon=phone
+Categories=Network;Utility;
+X-GNOME-Autostart-enabled=true
