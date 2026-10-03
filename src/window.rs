@@ -48,8 +48,16 @@ enum Msg {
 
 pub fn run(page: Option<String>) -> glib::ExitCode {
     let app = adw::Application::builder().application_id(APP_ID).build();
+    // A second launch (another tray click) lands here in the running instance: toggle like most tray apps,
+    // closing a focused window and raising one that's behind others.
     app.connect_activate(move |app| match app.active_window() {
-        Some(w) => w.present(),
+        Some(w) if w.is_active() => w.close(),
+        // present() alone can't take focus on Wayland without an activation token (a tray click gives us
+        // none), but a freshly mapped window is focused: remap the same window, keeping its state.
+        Some(w) => {
+            w.set_visible(false);
+            w.present();
+        }
         None => build(app, page.as_deref()),
     });
     // Our own flags (--window, --debug) are not GApplication options.
