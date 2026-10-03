@@ -207,7 +207,7 @@ impl ksni::Tray for Indicator {
     /// Left click opens the device window in its own process, keeping GTK out of the tray.
     fn activate(&mut self, _x: i32, _y: i32) {
         background(|| {
-            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            let exe = self_exe().map_err(|e| e.to_string())?;
             let mut cmd = Command::new(exe);
             cmd.arg("--window");
             if DEBUG.load(Ordering::Relaxed) {
@@ -265,6 +265,16 @@ impl ksni::Tray for Indicator {
         menu.push(item("Quit", "application-exit", Box::new(|_| std::process::exit(0))));
         menu
     }
+}
+
+/// Our own binary for spawning the window. After an upgrade replaces the file, Linux reports the running
+/// image as "<path> (deleted)"; the new binary sits at the original path, so launch that.
+fn self_exe() -> std::io::Result<std::path::PathBuf> {
+    let exe = std::env::current_exe()?;
+    Ok(match exe.to_str().and_then(|s| s.strip_suffix(" (deleted)")) {
+        Some(original) => original.into(),
+        None => exe,
+    })
 }
 
 fn refresh(tray: &ksni::blocking::Handle<Indicator>) {
