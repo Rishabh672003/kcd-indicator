@@ -489,7 +489,7 @@ fn build(app: &adw::Application) {
     }
     let scrolled = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
-        .child(&adw::Clamp::builder().maximum_size(520).child(&content).build())
+        .child(&adw::Clamp::builder().maximum_size(860).child(&content).build())
         .build();
 
     let empty = adw::StatusPage::builder().icon_name("phone-symbolic").title("Connecting to kcd…").build();
@@ -518,7 +518,7 @@ fn build(app: &adw::Application) {
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title("KDE Connect")
-        .default_width(440)
+        .default_width(900)
         .default_height(720)
         .content(&toolbar)
         .build();
