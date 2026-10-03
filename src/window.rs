@@ -198,7 +198,8 @@ impl Ui {
     fn send_files(&self, paths: Vec<String>) {
         let n = paths.len();
         for f in paths {
-            self.device_call("share", json!({ "file": f }), None);
+            // kcd reads `filePath`; its IPC docs say `file`.
+            self.device_call("share", json!({ "filePath": f }), None);
         }
         if n > 0 {
             self.toast(&format!("Sending {n} file{}…", if n == 1 { "" } else { "s" }));

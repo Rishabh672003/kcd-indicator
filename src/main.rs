@@ -113,7 +113,7 @@ fn send_files(id: String) -> Action {
                 .output()
                 .map_err(|e| format!("zenity not available: {e}"))?;
             for f in String::from_utf8_lossy(&out.stdout).lines().filter(|l| !l.is_empty()) {
-                ipc::call("share", json!({ "deviceId": id, "file": f }))?;
+                ipc::call("share", json!({ "deviceId": id, "filePath": f }))?;
             }
             Ok(())
         })
@@ -168,13 +168,15 @@ fn device_menu(d: &Device, pair_key: Option<&String>) -> MenuItem<Indicator> {
         "PAIR_REQUESTED_BY_PEER" => {
             status = " (pair request)".into();
             items.push(info(&format!("Verification key: {}", pair_key.map_or("?", |k| k.as_str()))));
-            items.push(item("Accept pairing", "dialog-ok", device_cmd("pair", id, json!({ "accept": true }))));
-            items.push(item("Reject", "dialog-cancel", device_cmd("pair", id, json!({ "reject": true }))));
+            // kcd's `pair` ignores the documented accept/reject flags: it accepts a peer's request, and
+            // rejecting goes through `unpair`.
+            items.push(item("Accept pairing", "dialog-ok", device_cmd("pair", id, none.clone())));
+            items.push(item("Reject", "dialog-cancel", device_cmd("unpair", id, none)));
         }
         "PAIR_REQUESTED" => {
             status = " (pairing…)".into();
             items.push(info("Waiting for the phone to accept"));
-            items.push(item("Cancel", "dialog-cancel", device_cmd("pair", id, json!({ "reject": true }))));
+            items.push(item("Cancel", "dialog-cancel", device_cmd("unpair", id, none)));
         }
         _ => {
             status = " (unpaired)".into();
