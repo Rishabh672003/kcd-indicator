@@ -311,6 +311,12 @@ fn on_event(tray: &ksni::blocking::Handle<Indicator>, ev: ipc::Event) {
             }
             return;
         }
+        // The phone drops its reply handles when the connection ends.
+        "device.connected" | "device.disconnected" => {
+            if let Err(e) = window::notifications::forget_device_replies(&ev.device_id) {
+                log!("cannot update notifications: {e}");
+            }
+        }
         "pair.accepted" | "pair.rejected" => {
             tray.update(|t| t.pair_keys.remove(&ev.device_id));
         }

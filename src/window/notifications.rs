@@ -55,6 +55,25 @@ fn save(list: &[Notification]) -> std::io::Result<()> {
     std::fs::rename(tmp, path) // atomic, so the window never reads half a file
 }
 
+/// The phone forgets reply handles when the connection ends and each works once: clear the device's reply
+/// ids (all of them, or just `reply_id`). Returns whether anything changed.
+fn forget_replies(list: &mut [Notification], device_id: &str, reply_id: Option<&str>) -> bool {
+    let mut changed = false;
+    for n in list.iter_mut().filter(|n| n.device_id == device_id && !n.reply_id.is_empty()) {
+        if reply_id.is_none_or(|r| r == n.reply_id) {
+            n.reply_id.clear();
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Called by the tray when a device connects or disconnects.
+pub fn forget_device_replies(device_id: &str) -> std::io::Result<()> {
+    let mut list = load();
+    if forget_replies(&mut list, device_id, None) { save(&list) } else { Ok(()) }
+}
+
 /// Called by the tray for every `notification` event; newest first, capped at `KEEP`.
 pub fn record(n: Notification) -> std::io::Result<()> {
     let mut list = load();
@@ -118,6 +137,18 @@ impl Page {
         self.render(ui);
     }
 
+    /// Drop stale reply ids in the window and the shared store.
+    pub(super) fn forget_replies(&self, device_id: &str, reply_id: Option<&str>, ui: &Ui) {
+        if !forget_replies(&mut self.list.borrow_mut(), device_id, reply_id) {
+            return;
+        }
+        let mut stored = load();
+        if forget_replies(&mut stored, device_id, reply_id) && let Err(e) = save(&stored) {
+            log!("cannot update notifications: {e}");
+        }
+        self.render(ui);
+    }
+
     pub(super) fn render(&self, ui: &Ui) {
         for row in self.rows.borrow_mut().drain(..) {
             self.group.remove(&row);
@@ -141,8 +172,11 @@ impl Page {
             row.add_suffix(&when);
             if !n.reply_id.is_empty() {
                 let reply = gtk::Button::builder().icon_name("mail-reply-sender-symbolic").tooltip_text("Reply").valign(gtk::Align::Center).css_classes(["flat"]).build();
-                let (ui2, reply_id, to) = (ui.clone(), n.reply_id.clone(), title.clone());
-                reply.connect_clicked(move |_| ask_reply(&ui2, &to, reply_id.clone()));
+                let (ui2, page, device, reply_id, to) = (ui.clone(), self.clone(), n.device_id.clone(), n.reply_id.clone(), title.clone());
+                reply.connect_clicked(move |_| {
+                    let (page, device, used) = (page.clone(), device.clone(), reply_id.clone());
+                    ask_reply(&ui2, &to, reply_id.clone(), move |ui| page.forget_replies(&device, Some(&used), ui));
+                });
                 row.add_suffix(&reply);
             }
             self.group.add(&row);
@@ -151,7 +185,8 @@ impl Page {
     }
 }
 
-fn ask_reply(ui: &Ui, to: &str, reply_id: String) {
+/// `sent` runs once the reply is handed to kcd; the phone accepts each reply id only once.
+fn ask_reply(ui: &Ui, to: &str, reply_id: String, sent: impl Fn(&Ui) + 'static) {
     let entry = gtk::Entry::builder().placeholder_text("Reply").activates_default(true).build();
     let dialog = adw::AlertDialog::new(Some("Reply"), Some(to));
     dialog.set_extra_child(Some(&entry));
@@ -163,6 +198,7 @@ fn ask_reply(ui: &Ui, to: &str, reply_id: String) {
         let text = entry.text().to_string();
         if !text.trim().is_empty() {
             ui2.device_call("notify_reply", json!({ "replyId": reply_id, "message": text }), Some("Reply sent"));
+            sent(&ui2);
         }
     });
     dialog.present(Some(&ui.window));
@@ -177,5 +213,16 @@ mod tests {
         let n = Notification::from_event("d", &json!({"appName": "WhatsApp", "title": "Ada", "text": "hi", "requestReplyId": "r1"}));
         assert_eq!((n.app.as_str(), n.title.as_str(), n.text.as_str(), n.reply_id.as_str()), ("WhatsApp", "Ada", "hi", "r1"));
         assert!(Notification::from_event("d", &json!({"title": "x"})).reply_id.is_empty());
+    }
+
+    #[test]
+    fn forgets_reply_ids() {
+        let n = |dev: &str, r: &str| Notification { device_id: dev.into(), reply_id: r.into(), ..Default::default() };
+        let mut list = vec![n("a", "r1"), n("a", "r2"), n("b", "r3")];
+        assert!(forget_replies(&mut list, "a", Some("r1")));
+        assert_eq!(list.iter().map(|n| n.reply_id.as_str()).collect::<Vec<_>>(), ["", "r2", "r3"]);
+        assert!(forget_replies(&mut list, "a", None));
+        assert_eq!(list.iter().map(|n| n.reply_id.as_str()).collect::<Vec<_>>(), ["", "", "r3"]);
+        assert!(!forget_replies(&mut list, "a", None));
     }
 }

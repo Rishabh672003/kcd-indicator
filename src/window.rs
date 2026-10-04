@@ -44,6 +44,8 @@ enum Msg {
     Sms(String, sms::Sms),
     Notification(notifications::Notification),
     ContactsChanged,
+    /// A device connected or disconnected: its earlier notification reply ids are dead.
+    ConnectionChanged(String),
 }
 
 pub fn run(page: Option<String>) -> glib::ExitCode {
@@ -85,6 +87,10 @@ fn spawn_watcher(tx: async_channel::Sender<Msg>) {
                     },
                     "notification" => Msg::Notification(notifications::Notification::from_event(&ev.device_id, p)),
                     "contacts.updated" => Msg::ContactsChanged,
+                    "device.connected" | "device.disconnected" => {
+                        let _ = tx.send_blocking(Msg::ConnectionChanged(ev.device_id.clone()));
+                        Msg::Devices(ipc::devices())
+                    }
                     "share.progress" => Msg::Progress {
                         file,
                         current: p["current"].as_u64().unwrap_or(0),
@@ -402,6 +408,7 @@ impl Ui {
             }
             Msg::Notification(n) => return self.notifications.push(n, self),
             Msg::ContactsChanged => return self.load_contacts(),
+            Msg::ConnectionChanged(device) => return self.notifications.forget_replies(&device, None, self),
             Msg::Progress { file, current, total } => {
                 let (row, bar) = self.transfer_row(&file);
                 row.set_subtitle(&format!("{} of {}", fmt_bytes(current), fmt_bytes(total)));
