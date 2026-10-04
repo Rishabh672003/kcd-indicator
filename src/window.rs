@@ -330,7 +330,10 @@ impl Ui {
             self.artist.set_visible(!by.is_empty());
             match m.album_art_url.strip_prefix("file://") {
                 Some(path) => {
-                    self.art.set_filename(Some(path));
+                    // Decoding the art is costly; skip it when unchanged.
+                    if self.art.file().and_then(|f| f.path()).is_none_or(|p| p != std::path::Path::new(path)) {
+                        self.art.set_filename(Some(path));
+                    }
                     self.art.set_visible(true);
                     self.art_placeholder.set_visible(false);
                 }
@@ -356,6 +359,9 @@ impl Ui {
 
     /// Advance the seek bar between pushes from the phone.
     fn tick(&self) {
+        if !self.position.is_mapped() {
+            return;
+        }
         let st = self.state.borrow();
         let Some(m) = st.device().and_then(|d| d.media.as_ref()) else { return };
         if st.seek_hold.is_some_and(|t| t.elapsed() < Duration::from_secs(2)) {

@@ -6,9 +6,11 @@ use super::{Ui, fmt_when};
 use adw::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::cell::RefCell;
+use gtk::glib;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Duration;
 
 const KEEP: usize = 100;
 
@@ -89,6 +91,7 @@ pub(super) struct Page {
     group: adw::PreferencesGroup,
     rows: Rc<RefCell<Vec<adw::ActionRow>>>,
     list: Rc<RefCell<Vec<Notification>>>,
+    render_queued: Rc<Cell<bool>>,
 }
 
 impl Page {
@@ -114,7 +117,7 @@ impl Page {
         root.add_named(&scrolled, Some("list"));
         root.add_named(&empty, Some("empty"));
 
-        Page { root, clear, group, rows: Rc::default(), list: Rc::new(RefCell::new(load())) }
+        Page { root, clear, group, rows: Rc::default(), list: Rc::new(RefCell::new(load())), render_queued: Rc::default() }
     }
 
     pub(super) fn connect(&self, ui: &Ui) {
@@ -134,7 +137,15 @@ impl Page {
         list.insert(0, n);
         list.truncate(KEEP);
         drop(list);
-        self.render(ui);
+        // The phone sends its active notifications in a burst on connect; coalesce them into one redraw.
+        if self.render_queued.replace(true) {
+            return;
+        }
+        let (p, ui) = (self.clone(), ui.clone());
+        glib::timeout_add_local_once(Duration::from_millis(150), move || {
+            p.render_queued.set(false);
+            p.render(&ui);
+        });
     }
 
     /// Drop stale reply ids in the window and the shared store.

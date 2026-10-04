@@ -8,7 +8,7 @@ use gtk::glib;
 use serde::Deserialize;
 use serde_json::json;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -41,8 +41,10 @@ struct State {
     /// Last 10 digits of a number → contact name.
     contacts: HashMap<String, String>,
     selected: Option<i64>,
-    /// Thread ids in list order, to map activated rows back.
-    order: Vec<i64>,
+    /// List row per thread; the row's widget name is the thread id.
+    rows: HashMap<i64, (adw::ActionRow, gtk::Label)>,
+    /// Threads changed since the last render.
+    dirty: HashSet<i64>,
     render_queued: bool,
 }
 
@@ -53,6 +55,10 @@ fn number_key(n: &str) -> String {
 }
 
 impl State {
+    fn last_date(&self, id: i64) -> i64 {
+        self.threads.get(&id).and_then(|t| t.messages.keys().last()).map_or(0, |(date, _)| *date)
+    }
+
     fn name(&self, address: &str) -> String {
         self.contacts.get(&number_key(address)).cloned().unwrap_or_else(|| address.to_string())
     }
@@ -127,10 +133,15 @@ impl Page {
     }
 
     pub fn connect(&self, ui: &Ui) {
+        let p = self.clone();
+        self.list.set_sort_func(move |a, b| {
+            let st = p.state.borrow();
+            let date = |r: &gtk::ListBoxRow| r.widget_name().parse().map_or(0, |id| st.last_date(id));
+            date(b).cmp(&date(a)).into()
+        });
         let (p, u) = (self.clone(), ui.clone());
         self.list.connect_row_activated(move |_, row| {
-            let id = p.state.borrow().order.get(row.index() as usize).copied();
-            if let Some(id) = id {
+            if let Ok(id) = row.widget_name().parse() {
                 p.state.borrow_mut().selected = Some(id);
                 p.render_thread();
                 p.entry.grab_focus(); // so typing goes to the reply box, not the list
@@ -183,8 +194,10 @@ impl Page {
         let mut st = self.state.borrow_mut();
         st.threads.clear();
         st.selected = None;
+        st.rows.clear();
+        st.dirty.clear();
         drop(st);
-        self.queue_render();
+        self.list.remove_all();
     }
 
     pub fn set_contacts(&self, contacts: &serde_json::Value) {
@@ -195,7 +208,11 @@ impl Page {
                 map.insert(number_key(phone), name.to_string());
             }
         }
-        self.state.borrow_mut().contacts = map;
+        let mut st = self.state.borrow_mut();
+        st.contacts = map;
+        let all: Vec<i64> = st.threads.keys().copied().collect();
+        st.dirty.extend(all);
+        drop(st);
         self.queue_render();
     }
 
@@ -205,7 +222,9 @@ impl Page {
         if thread.address.is_empty() {
             thread.address = sms.sender.clone();
         }
+        let id = sms.thread_id;
         thread.messages.insert((sms.date, sms.kind), sms);
+        st.dirty.insert(id);
         drop(st);
         self.queue_render();
     }
@@ -220,37 +239,58 @@ impl Page {
         drop(st);
         let p = self.clone();
         glib::timeout_add_local_once(Duration::from_millis(150), move || {
-            p.state.borrow_mut().render_queued = false;
-            p.render_list();
-            p.render_thread();
+            let mut st = p.state.borrow_mut();
+            st.render_queued = false;
+            let dirty = std::mem::take(&mut st.dirty);
+            let thread_changed = st.selected.is_some_and(|id| dirty.contains(&id));
+            drop(st);
+            p.render_list(&dirty);
+            if thread_changed {
+                p.render_thread();
+            }
         });
     }
 
-    fn render_list(&self) {
+    /// Update the rows of changed threads; the list's sort func keeps them newest first.
+    fn render_list(&self, dirty: &HashSet<i64>) {
         let mut st = self.state.borrow_mut();
-        let mut threads: Vec<(i64, i64)> = st.threads.iter().filter_map(|(id, t)| t.messages.keys().last().map(|(date, _)| (*date, *id))).collect();
-        threads.sort_unstable_by(|a, b| b.cmp(a));
-        st.order = threads.iter().map(|(_, id)| *id).collect();
-        drop(st);
-        let st = self.state.borrow();
-        self.list.remove_all();
-        for id in &st.order {
-            let t = &st.threads[id];
+        let mut added = Vec::new();
+        for id in dirty {
+            let Some(t) = st.threads.get(id) else { continue };
             let Some(last) = t.messages.values().last() else { continue };
             let preview = if last.kind == 2 { format!("You: {}", one_line(&last.body)) } else { one_line(&last.body) };
-            let row = super::plain_row(&st.name(&t.address), &preview);
-            row.set_subtitle_lines(1);
-            row.set_activatable(true);
-            let when = gtk::Label::new(Some(&fmt_when(last.date)));
-            when.add_css_class("dim-label");
-            when.add_css_class("caption");
-            row.add_suffix(&when);
-            self.list.append(&row);
-            if st.selected == Some(*id) {
-                self.list.select_row(Some(&row));
+            let (title, when) = (st.name(&t.address), fmt_when(last.date));
+            match st.rows.get(id) {
+                Some((row, label)) => {
+                    row.set_title(&title);
+                    row.set_subtitle(&preview);
+                    label.set_label(&when);
+                }
+                None => {
+                    let row = super::plain_row(&title, &preview);
+                    row.set_subtitle_lines(1);
+                    row.set_activatable(true);
+                    row.set_widget_name(&id.to_string());
+                    let label = gtk::Label::new(Some(&when));
+                    label.add_css_class("dim-label");
+                    label.add_css_class("caption");
+                    row.add_suffix(&label);
+                    st.rows.insert(*id, (row.clone(), label));
+                    added.push(row);
+                }
             }
         }
-        if st.selected.is_none() && !st.threads.is_empty() && self.stack.visible_child_name().as_deref() == Some("loading") {
+        let selected = st.selected.and_then(|id| st.rows.get(&id)).map(|(row, _)| row.clone());
+        let show_pick = st.selected.is_none() && !st.threads.is_empty();
+        drop(st); // the sort func borrows the state
+        for row in &added {
+            self.list.append(row);
+        }
+        self.list.invalidate_sort();
+        if let Some(row) = selected {
+            self.list.select_row(Some(&row));
+        }
+        if show_pick && self.stack.visible_child_name().as_deref() == Some("loading") {
             self.stack.set_visible_child_name("pick");
         }
     }
