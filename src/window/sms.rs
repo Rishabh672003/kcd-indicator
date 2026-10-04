@@ -10,10 +10,14 @@ use serde_json::json;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Messages fetched per thread page.
 const PAGE: i64 = 50;
+/// The phone sends no end marker; loading is over after this long without a message.
+const QUIET: Duration = Duration::from_secs(2);
+/// Give up waiting for a first message after this long.
+const NO_ANSWER: Duration = Duration::from_secs(15);
 
 #[derive(Deserialize, Clone, Debug, Default)]
 #[serde(default)]
@@ -46,6 +50,9 @@ struct State {
     /// Threads changed since the last render.
     dirty: HashSet<i64>,
     render_queued: bool,
+    /// When `sms_request_conversations` was sent, while its answer is still streaming in.
+    loading: Option<Instant>,
+    last_sms: Option<Instant>,
 }
 
 /// Compare numbers by their last 10 digits so "+91 98…" and "098…" match.
@@ -76,6 +83,9 @@ pub struct Page {
     entry: gtk::Entry,
     send: gtk::Button,
     new_message: gtk::Button,
+    progress: gtk::Revealer,
+    progress_label: gtk::Label,
+    loading: adw::StatusPage,
     state: Rc<RefCell<State>>,
 }
 
@@ -90,8 +100,14 @@ impl Page {
             .margin_start(6)
             .margin_end(6)
             .build();
+        let progress_label = gtk::Label::builder().xalign(0.0).css_classes(["dim-label", "caption"]).build();
+        let progress_box = gtk::Box::builder().spacing(8).margin_start(14).margin_end(14).margin_bottom(6).build();
+        progress_box.append(&adw::Spinner::new());
+        progress_box.append(&progress_label);
+        let progress = gtk::Revealer::builder().child(&progress_box).build();
         let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 0);
         sidebar.append(&new_message);
+        sidebar.append(&progress);
         sidebar.append(&gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).vexpand(true).child(&list).build());
         sidebar.set_size_request(300, -1);
 
@@ -122,14 +138,14 @@ impl Page {
             .description("Pick a conversation, or start a new one.")
             .build();
         let loading = adw::StatusPage::builder().title("Loading conversations…").description("Asking your phone for its messages.").build();
-        loading.set_child(Some(&gtk::Spinner::builder().spinning(true).halign(gtk::Align::Center).width_request(32).height_request(32).build()));
+        loading.set_paintable(Some(&adw::SpinnerPaintable::new(Some(&loading))));
         let stack = gtk::Stack::new();
         stack.add_named(&loading, Some("loading"));
         stack.add_named(&pick, Some("pick"));
         stack.add_named(&thread_view, Some("thread"));
 
         let root = gtk::Paned::builder().orientation(gtk::Orientation::Horizontal).start_child(&sidebar).end_child(&stack).position(320).shrink_start_child(false).build();
-        Page { root, list, stack, who, convo, scroll, older, entry, send, new_message, state: Rc::default() }
+        Page { root, list, stack, who, convo, scroll, older, entry, send, new_message, progress, progress_label, loading, state: Rc::default() }
     }
 
     pub fn connect(&self, ui: &Ui) {
@@ -183,10 +199,53 @@ impl Page {
 
     /// Ask for the latest message of every thread. Call once the event subscription is live.
     pub fn request_list(&self, ui: &Ui) {
-        if self.state.borrow().threads.is_empty() {
+        let mut st = self.state.borrow_mut();
+        let already = st.loading.replace(Instant::now()).is_some();
+        st.last_sms = None;
+        if st.threads.is_empty() {
+            self.loading.set_icon_name(None);
+            self.loading.set_paintable(Some(&adw::SpinnerPaintable::new(Some(&self.loading))));
+            self.loading.set_title("Loading conversations…");
+            self.loading.set_description(Some("Asking your phone for its messages."));
             self.stack.set_visible_child_name("loading");
         }
+        drop(st);
+        self.show_progress();
         ui.device_call("sms_request_conversations", json!({}), None);
+        if already {
+            return;
+        }
+        let p = self.clone();
+        glib::timeout_add_local(Duration::from_millis(500), move || p.check_loading());
+    }
+
+    fn show_progress(&self) {
+        let st = self.state.borrow();
+        self.progress.set_reveal_child(st.loading.is_some());
+        self.progress_label.set_label(&match st.threads.len() {
+            0 => "Loading conversations…".to_string(),
+            n => format!("Loading conversations… {n}"),
+        });
+    }
+
+    /// End loading once messages stop arriving, or if the phone never answers.
+    fn check_loading(&self) -> glib::ControlFlow {
+        let mut st = self.state.borrow_mut();
+        let Some(started) = st.loading else { return glib::ControlFlow::Break };
+        match st.last_sms {
+            Some(t) if t.elapsed() >= QUIET => {}
+            None if started.elapsed() >= NO_ANSWER => {
+                self.loading.set_paintable(None::<&gtk::gdk::Paintable>);
+                self.loading.set_icon_name(Some("dialog-warning-symbolic"));
+                self.loading.set_title("No answer from your phone");
+                self.loading.set_description(Some("Check that KDE Connect on the phone has permission to read SMS."));
+            }
+            _ => return glib::ControlFlow::Continue,
+        }
+        st.loading = None;
+        drop(st);
+        self.show_progress();
+        glib::ControlFlow::Break
     }
 
     /// Forget everything (device switched).
@@ -196,8 +255,10 @@ impl Page {
         st.selected = None;
         st.rows.clear();
         st.dirty.clear();
+        st.loading = None;
         drop(st);
         self.list.remove_all();
+        self.show_progress();
     }
 
     pub fn set_contacts(&self, contacts: &serde_json::Value) {
@@ -225,6 +286,9 @@ impl Page {
         let id = sms.thread_id;
         thread.messages.insert((sms.date, sms.kind), sms);
         st.dirty.insert(id);
+        if st.loading.is_some() {
+            st.last_sms = Some(Instant::now());
+        }
         drop(st);
         self.queue_render();
     }
@@ -290,6 +354,7 @@ impl Page {
         if let Some(row) = selected {
             self.list.select_row(Some(&row));
         }
+        self.show_progress();
         if show_pick && self.stack.visible_child_name().as_deref() == Some("loading") {
             self.stack.set_visible_child_name("pick");
         }
