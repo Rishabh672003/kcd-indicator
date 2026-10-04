@@ -1,6 +1,5 @@
-//! Recent phone notifications. kcd keeps no history and its `notification` events carry no id (so they
-//! can't be dismissed or matched to `notification.canceled`), so the always-running tray records them to a
-//! small file in the runtime dir and the window lists them, with inline reply where the app supports it.
+//! Recent phone notifications. kcd keeps no history, so the always-running tray records them to a small file
+//! in the runtime dir and the window lists them, with inline reply where the app supports it.
 
 use super::{Ui, fmt_when};
 use adw::prelude::*;
@@ -18,6 +17,8 @@ const KEEP: usize = 100;
 #[serde(default)]
 pub struct Notification {
     pub device_id: String,
+    /// The phone's notification id; empty from kcd versions that don't send it.
+    pub id: String,
     pub app: String,
     pub title: String,
     pub text: String,
@@ -31,6 +32,7 @@ impl Notification {
         let s = |k: &str| p[k].as_str().unwrap_or_default().to_string();
         Notification {
             device_id: device_id.into(),
+            id: s("id"),
             app: s("appName"),
             title: s("title"),
             text: s("text"),
@@ -76,11 +78,21 @@ pub fn forget_device_replies(device_id: &str) -> std::io::Result<()> {
     if forget_replies(&mut list, device_id, None) { save(&list) } else { Ok(()) }
 }
 
-/// Called by the tray for every `notification` event; newest first, capped at `KEEP`.
-pub fn record(n: Notification) -> std::io::Result<()> {
-    let mut list = load();
+/// The phone re-sends a notification on every update: replace the earlier copy (same id, or same content
+/// without one) and put it first, capped at `KEEP`.
+fn upsert(list: &mut Vec<Notification>, n: Notification) {
+    list.retain(|o| {
+        o.device_id != n.device_id
+            || if n.id.is_empty() || o.id.is_empty() { (&o.app, &o.title, &o.text) != (&n.app, &n.title, &n.text) } else { o.id != n.id }
+    });
     list.insert(0, n);
     list.truncate(KEEP);
+}
+
+/// Called by the tray for every `notification` event.
+pub fn record(n: Notification) -> std::io::Result<()> {
+    let mut list = load();
+    upsert(&mut list, n);
     save(&list)
 }
 
@@ -133,10 +145,7 @@ impl Page {
 
     pub(super) fn push(&self, n: Notification, ui: &Ui) {
         // The tray records it too; this keeps an open window live without re-reading the file.
-        let mut list = self.list.borrow_mut();
-        list.insert(0, n);
-        list.truncate(KEEP);
-        drop(list);
+        upsert(&mut self.list.borrow_mut(), n);
         // The phone sends its active notifications in a burst on connect; coalesce them into one redraw.
         if self.render_queued.replace(true) {
             return;
@@ -224,6 +233,20 @@ mod tests {
         let n = Notification::from_event("d", &json!({"appName": "WhatsApp", "title": "Ada", "text": "hi", "requestReplyId": "r1"}));
         assert_eq!((n.app.as_str(), n.title.as_str(), n.text.as_str(), n.reply_id.as_str()), ("WhatsApp", "Ada", "hi", "r1"));
         assert!(Notification::from_event("d", &json!({"title": "x"})).reply_id.is_empty());
+    }
+
+    #[test]
+    fn replaces_updated_notifications() {
+        let n = |dev: &str, id: &str, text: &str| Notification { device_id: dev.into(), id: id.into(), text: text.into(), ..Default::default() };
+        let mut list = Vec::new();
+        upsert(&mut list, n("a", "1", "0:01"));
+        upsert(&mut list, n("a", "2", "other"));
+        upsert(&mut list, n("a", "1", "0:02")); // update: replaces id 1, moves first
+        upsert(&mut list, n("b", "1", "0:02")); // other device
+        upsert(&mut list, n("a", "", "other")); // no id: matched by content
+        upsert(&mut list, n("a", "", "other"));
+        let got: Vec<_> = list.iter().map(|n| (n.device_id.as_str(), n.id.as_str(), n.text.as_str())).collect();
+        assert_eq!(got, [("a", "", "other"), ("b", "1", "0:02"), ("a", "1", "0:02")]);
     }
 
     #[test]
