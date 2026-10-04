@@ -14,6 +14,8 @@ use std::time::{Duration, Instant};
 
 /// Messages fetched per thread page.
 const PAGE: i64 = 50;
+/// Conversations listed until the user asks for all of them.
+const SHOWN: usize = 50;
 /// The phone sends no end marker; loading is over after this long without a message.
 const QUIET: Duration = Duration::from_secs(2);
 /// Give up waiting for a first message after this long.
@@ -53,6 +55,9 @@ struct State {
     /// When `sms_request_conversations` was sent, while its answer is still streaming in.
     loading: Option<Instant>,
     last_sms: Option<Instant>,
+    show_all: bool,
+    /// Rows older than this are hidden unless `show_all`.
+    cutoff: i64,
 }
 
 /// Compare numbers by their last 10 digits so "+91 98…" and "098…" match.
@@ -84,6 +89,7 @@ pub struct Page {
     send: gtk::Button,
     new_message: gtk::Button,
     progress: gtk::Revealer,
+    show_all: gtk::Button,
     progress_label: gtk::Label,
     loading: adw::StatusPage,
     state: Rc<RefCell<State>>,
@@ -108,7 +114,11 @@ impl Page {
         let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 0);
         sidebar.append(&new_message);
         sidebar.append(&progress);
-        sidebar.append(&gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).vexpand(true).child(&list).build());
+        let show_all = gtk::Button::builder().css_classes(["flat"]).margin_top(6).margin_bottom(6).margin_start(6).margin_end(6).visible(false).build();
+        let list_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        list_box.append(&list);
+        list_box.append(&show_all);
+        sidebar.append(&gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).vexpand(true).child(&list_box).build());
         sidebar.set_size_request(300, -1);
 
         let who = adw::WindowTitle::new("", "");
@@ -145,7 +155,7 @@ impl Page {
         stack.add_named(&thread_view, Some("thread"));
 
         let root = gtk::Paned::builder().orientation(gtk::Orientation::Horizontal).start_child(&sidebar).end_child(&stack).position(320).shrink_start_child(false).build();
-        Page { root, list, stack, who, convo, scroll, older, entry, send, new_message, progress, progress_label, loading, state: Rc::default() }
+        Page { root, list, stack, who, convo, scroll, older, entry, send, new_message, progress, show_all, progress_label, loading, state: Rc::default() }
     }
 
     pub fn connect(&self, ui: &Ui) {
@@ -154,6 +164,18 @@ impl Page {
             let st = p.state.borrow();
             let date = |r: &gtk::ListBoxRow| r.widget_name().parse().map_or(0, |id| st.last_date(id));
             date(b).cmp(&date(a)).into()
+        });
+        let p = self.clone();
+        self.list.set_filter_func(move |r| {
+            let st = p.state.borrow();
+            let id: i64 = r.widget_name().parse().unwrap_or_default();
+            st.show_all || st.selected == Some(id) || st.last_date(id) >= st.cutoff
+        });
+        let p = self.clone();
+        self.show_all.connect_clicked(move |b| {
+            p.state.borrow_mut().show_all = true;
+            b.set_visible(false);
+            p.list.invalidate_filter();
         });
         let (p, u) = (self.clone(), ui.clone());
         self.list.connect_row_activated(move |_, row| {
@@ -256,6 +278,8 @@ impl Page {
         st.rows.clear();
         st.dirty.clear();
         st.loading = None;
+        st.show_all = false;
+        st.cutoff = 0;
         drop(st);
         self.list.remove_all();
         self.show_progress();
@@ -344,6 +368,13 @@ impl Page {
                 }
             }
         }
+        let mut dates: Vec<i64> = st.threads.keys().map(|id| st.last_date(*id)).collect();
+        let hidden = dates.len().saturating_sub(SHOWN);
+        let cutoff = if hidden > 0 { *dates.select_nth_unstable_by(SHOWN - 1, |a, b| b.cmp(a)).1 } else { i64::MIN };
+        let refilter = cutoff != st.cutoff;
+        st.cutoff = cutoff;
+        self.show_all.set_visible(!st.show_all && hidden > 0);
+        self.show_all.set_label(&format!("Show {hidden} older conversations"));
         let selected = st.selected.and_then(|id| st.rows.get(&id)).map(|(row, _)| row.clone());
         let show_pick = st.selected.is_none() && !st.threads.is_empty();
         drop(st); // the sort func borrows the state
@@ -351,6 +382,9 @@ impl Page {
             self.list.append(row);
         }
         self.list.invalidate_sort();
+        if refilter {
+            self.list.invalidate_filter();
+        }
         if let Some(row) = selected {
             self.list.select_row(Some(&row));
         }
