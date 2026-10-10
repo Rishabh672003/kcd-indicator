@@ -1,0 +1,47 @@
+# build.sh compiles the binary first; no source to build here, so no debuginfo.
+%global debug_package %{nil}
+%global _build_id_links none
+
+Name:           kcd-indicator
+Version:        @VERSION@
+Release:        1%{?dist}
+Summary:        System tray indicator and window for the kcd KDE Connect daemon
+License:        GPL-3.0-or-later
+URL:            https://github.com/Rishabh672003/kcd-indicator
+Source0:        kcd-indicator
+Source1:        kcd-indicator.desktop
+Source2:        LICENSE
+Source3:        README.md
+ExclusiveArch:  x86_64 aarch64
+
+BuildRequires:  desktop-file-utils
+Requires:       hicolor-icon-theme
+Recommends:     kcd
+Recommends:     zenity
+Recommends:     libnotify
+
+%description
+Shows the phone's battery and connection state in the system tray, with
+actions to browse files, send the clipboard or files, ring, ping and control
+media. Left-click opens a GTK 4 window with the device overview, SMS
+conversations and recent notifications with inline replies.
+
+%prep
+cp %{SOURCE2} %{SOURCE3} .
+
+%build
+
+%install
+install -Dm 0755 %{SOURCE0} %{buildroot}%{_bindir}/kcd-indicator
+install -Dm 0644 %{SOURCE1} %{buildroot}%{_sysconfdir}/xdg/autostart/kcd-indicator.desktop
+desktop-file-validate %{buildroot}%{_sysconfdir}/xdg/autostart/kcd-indicator.desktop
+
+%files
+%license LICENSE
+%doc README.md
+%{_bindir}/kcd-indicator
+%config(noreplace) %{_sysconfdir}/xdg/autostart/kcd-indicator.desktop
+
+%changelog
+* @DATE@ Rishabh672003 <53911515+Rishabh672003@users.noreply.github.com> - @VERSION@-1
+- Release @VERSION@

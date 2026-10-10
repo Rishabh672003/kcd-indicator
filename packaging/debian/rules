@@ -1,0 +1,19 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+# build.sh compiles the binary before dpkg-buildpackage runs.
+override_dh_auto_build:
+
+override_dh_auto_test:
+
+override_dh_dwz:
+
+override_dh_strip:
+	dh_strip --no-automatic-dbgsym
+
+override_dh_auto_install:
+	install -Dm 0755 kcd-indicator debian/kcd-indicator/usr/bin/kcd-indicator
+	install -Dm 0644 kcd-indicator.desktop debian/kcd-indicator/etc/xdg/autostart/kcd-indicator.desktop
+	desktop-file-validate debian/kcd-indicator/etc/xdg/autostart/kcd-indicator.desktop

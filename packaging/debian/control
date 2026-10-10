@@ -1,0 +1,28 @@
+Source: kcd-indicator
+Section: utils
+Priority: optional
+Maintainer: Rishabh672003 <53911515+Rishabh672003@users.noreply.github.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ desktop-file-utils
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/Rishabh672003/kcd-indicator
+Vcs-Git: https://github.com/Rishabh672003/kcd-indicator.git
+Vcs-Browser: https://github.com/Rishabh672003/kcd-indicator
+
+Package: kcd-indicator
+Architecture: amd64 arm64
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends},
+ hicolor-icon-theme
+Recommends:
+ kcd,
+ zenity,
+ libnotify-bin
+Description: System tray indicator and window for the kcd KDE Connect daemon
+ Shows the phone's battery and connection state in the system tray, with
+ actions to browse files, send the clipboard or files, ring, ping and control
+ media. Left-click opens a GTK 4 window with the device overview, SMS
+ conversations and recent notifications with inline replies.

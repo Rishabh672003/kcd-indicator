@@ -1,0 +1,58 @@
+name: Packages
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deb:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git curl ca-certificates build-essential \
+            pkg-config libgtk-4-dev libadwaita-1-dev debhelper desktop-file-utils
+      - uses: actions/checkout@v4
+      # Debian's rustc is older than the gtk-rs crates' minimum (1.92).
+      - uses: dtolnay/rust-toolchain@stable
+      - run: packaging/debian/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: packaging/debian/*.deb
+
+  rpm:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Install build dependencies
+        run: dnf install -y git curl gcc pkgconf-pkg-config gtk4-devel libadwaita-devel rpm-build desktop-file-utils
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: packaging/rpm/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm
+          path: packaging/rpm/*.rpm
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [deb, rpm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --generate-notes \
+            || gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber

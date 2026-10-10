@@ -30,15 +30,24 @@ sudo pacman -U packaging/arch/kcd-indicator-*.pkg.tar.zst
 
 The package installs an XDG autostart entry, so desktops that honour `/etc/xdg/autostart` start the tray on login.
 
+### Debian / Fedora
+
+Download the `.deb` or `.rpm` from the [latest release](https://github.com/Rishabh672003/kcd-indicator/releases/latest), then:
+
+```sh
+sudo apt install ./kcd-indicator_*.deb       # Debian 13+
+sudo dnf install ./kcd-indicator-*.rpm       # Fedora
+```
+
 ### From source
 
-Build dependencies, then build and install with Cargo (Rust 1.85+):
+Build dependencies, then build and install with Cargo (Rust 1.92+):
 
 ```sh
 # Arch
 sudo pacman -S --needed rust gtk4 libadwaita
-# Debian / Ubuntu
-sudo apt install cargo libgtk-4-dev libadwaita-1-dev
+# Debian / Ubuntu (distro Rust is too old; install it with https://rustup.rs)
+sudo apt install build-essential libgtk-4-dev libadwaita-1-dev
 
 git clone https://github.com/Rishabh672003/kcd-indicator
 cd kcd-indicator
