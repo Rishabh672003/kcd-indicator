@@ -21,9 +21,15 @@ The tray icon shows your phone's battery and connection state. Its menu covers t
 
 ### Arch Linux
 
+Install [kcd-indicator](https://aur.archlinux.org/packages/kcd-indicator) from the AUR with your AUR helper:
+
 ```sh
-git clone https://github.com/Rishabh672003/kcd-indicator
-cd kcd-indicator
+paru -S kcd-indicator
+```
+
+To package the current checkout instead:
+
+```sh
 packaging/arch/build.sh
 sudo pacman -U packaging/arch/kcd-indicator-*.pkg.tar.zst
 ```
