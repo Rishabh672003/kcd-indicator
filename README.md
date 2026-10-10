@@ -19,6 +19,19 @@ The tray icon shows your phone's battery and connection state. Its menu covers t
 
 ## Install
 
+### Arch Linux
+
+```sh
+git clone https://github.com/Rishabh672003/kcd-indicator
+cd kcd-indicator
+packaging/arch/build.sh
+sudo pacman -U packaging/arch/kcd-indicator-*.pkg.tar.zst
+```
+
+The package installs an XDG autostart entry, so desktops that honour `/etc/xdg/autostart` start the tray on login.
+
+### From source
+
 Build dependencies, then build and install with Cargo (Rust 1.85+):
 
 ```sh

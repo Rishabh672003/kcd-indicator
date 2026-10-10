@@ -1,0 +1,22 @@
+# Maintainer: Rishabh672003
+# Packages the binary staged by build.sh; run that instead of makepkg directly.
+pkgname=kcd-indicator
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="System tray indicator and window for the kcd KDE Connect daemon"
+arch=('x86_64')
+url="https://github.com/Rishabh672003/kcd-indicator"
+license=('GPL-3.0-or-later')
+depends=('gtk4' 'libadwaita' 'kcd' 'hicolor-icon-theme')
+optdepends=('zenity: file picker for Send file in the tray menu'
+            'libnotify: pairing alerts')
+options=('!strip')  # keep the staged binary byte-identical so build.sh can verify it
+source=('kcd-indicator' 'kcd-indicator.desktop' 'LICENSE' 'README.md')
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')
+
+package() {
+    install -Dm755 kcd-indicator "$pkgdir/usr/bin/kcd-indicator"
+    install -Dm644 kcd-indicator.desktop "$pkgdir/etc/xdg/autostart/kcd-indicator.desktop"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
