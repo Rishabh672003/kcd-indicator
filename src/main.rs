@@ -85,8 +85,12 @@ fn device_cmd(cmd: &'static str, id: &str, extra: Value) -> Action {
 }
 
 // ksni treats `_` as a mnemonic marker; double it to show it literally.
+fn item_std(label: &str, icon: &str, activate: Action) -> StandardItem<Indicator> {
+    StandardItem { label: label.replace('_', "__"), icon_name: icon.into(), activate, ..Default::default() }
+}
+
 fn item(label: &str, icon: &str, activate: Action) -> MenuItem<Indicator> {
-    StandardItem { label: label.replace('_', "__"), icon_name: icon.into(), activate, ..Default::default() }.into()
+    item_std(label, icon, activate).into()
 }
 
 fn info(label: &str) -> MenuItem<Indicator> {
@@ -135,8 +139,10 @@ fn device_menu(d: &Device, pair_key: Option<&String>) -> MenuItem<Indicator> {
                 items.push(MenuItem::Separator);
             }
             // The daemon opens the file manager itself after mounting ([sftp] auto_open).
-            items.push(item("Browse device", "folder-remote", device_cmd("sftp_mount_local", id, none.clone())));
-            if d.sftp.as_ref().is_some_and(|s| s.mounted) {
+            let mounted = d.sftp.as_ref().is_some_and(|s| s.mounted);
+            let browse = StandardItem { enabled: !mounted, ..item_std("Browse device", "folder-remote", device_cmd("sftp_mount_local", id, none.clone())) };
+            items.push(browse.into());
+            if mounted {
                 items.push(item("Unmount", "media-eject", device_cmd("sftp_unmount", id, none.clone())));
             }
             items.push(item("Send clipboard", "edit-paste", device_cmd("clipboard_push", id, none.clone())));
