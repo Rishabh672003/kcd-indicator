@@ -39,6 +39,15 @@ sudo apt install ./kcd-indicator_*.deb       # Debian 13+
 sudo dnf install ./kcd-indicator-*.rpm       # Fedora
 ```
 
+### Prebuilt binary
+
+The release also has a `kcd-indicator-*-x86_64-linux.tar.gz` with the binary, desktop entry, license and README. It needs glibc 2.39+, GTK 4.14+ and libadwaita 1.6+:
+
+```sh
+tar -xzf kcd-indicator-*-x86_64-linux.tar.gz
+install -Dm755 kcd-indicator-*/kcd-indicator ~/.local/bin/kcd-indicator
+```
+
 ### From source
 
 Build dependencies, then build and install with Cargo (Rust 1.92+):

@@ -22,10 +22,19 @@ jobs:
       # Debian's rustc is older than the gtk-rs crates' minimum (1.92).
       - uses: dtolnay/rust-toolchain@stable
       - run: packaging/debian/build.sh
+      - name: Build tarball
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          dir="kcd-indicator-$version-$(uname -m)-linux"
+          mkdir "$dir"
+          cp target/release/kcd-indicator kcd-indicator.desktop LICENSE README.md "$dir/"
+          tar -czf "packaging/debian/$dir.tar.gz" "$dir"
       - uses: actions/upload-artifact@v4
         with:
           name: deb
-          path: packaging/debian/*.deb
+          path: |
+            packaging/debian/*.deb
+            packaging/debian/*.tar.gz
 
   rpm:
     runs-on: ubuntu-latest
