@@ -151,6 +151,7 @@ struct Ui {
     signal_icon: gtk::Image,
     files: adw::ActionRow,
     unmount: gtk::Button,
+    copy_path: gtk::Button,
     media: adw::PreferencesGroup,
     media_card: gtk::Box,
     no_media: adw::ActionRow,
@@ -316,6 +317,7 @@ impl Ui {
         let mount = d.sftp.as_ref().filter(|s| s.mounted).map(|s| s.mount_point.clone());
         self.files.set_subtitle(mount.as_deref().unwrap_or("Not mounted"));
         self.unmount.set_visible(mount.is_some());
+        self.copy_path.set_visible(mount.is_some());
         self.files.set_sensitive(d.connected);
         self.actions.set_sensitive(d.connected);
 
@@ -484,6 +486,8 @@ fn build(app: &adw::Application, page: Option<&str>) {
     let files = row("Phone storage", "folder-remote-symbolic");
     let browse = icon_button("folder-open-symbolic", "Browse files");
     let unmount = icon_button("media-eject-symbolic", "Unmount");
+    let copy_path = icon_button("edit-copy-symbolic", "Copy mount path");
+    files.add_suffix(&copy_path);
     files.add_suffix(&unmount);
     files.add_suffix(&browse);
 
@@ -650,6 +654,7 @@ fn build(app: &adw::Application, page: Option<&str>) {
         signal_icon,
         files,
         unmount: unmount.clone(),
+        copy_path: copy_path.clone(),
         media,
         media_card: card,
         no_media,
@@ -695,6 +700,12 @@ fn build(app: &adw::Application, page: Option<&str>) {
     browse.connect_clicked(move |_| u.device_call("sftp_mount_local", json!({}), Some("Opening phone storage…")));
     let u = ui.clone();
     unmount.connect_clicked(move |_| u.device_call("sftp_unmount", json!({}), None));
+    let u = ui.clone();
+    copy_path.connect_clicked(move |b| {
+        // Only visible while mounted, so the subtitle is the mount point.
+        b.clipboard().set_text(&u.files.subtitle().unwrap_or_default());
+        u.toast("Mount path copied");
+    });
     // The phone only accepts KDE Connect's PascalCase action names.
     for (button, action) in [(&prev, "Previous"), (&play, "PlayPause"), (&next, "Next")] {
         let u = ui.clone();
