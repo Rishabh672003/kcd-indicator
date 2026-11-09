@@ -125,6 +125,16 @@ fn send_files(id: String) -> Action {
     })
 }
 
+/// `systemctl --user <verb> kcd.service`; the watch loop reconnects on its own afterwards.
+fn systemctl(verb: &'static str) -> Action {
+    Box::new(move |_| {
+        background(move || {
+            let status = Command::new("systemctl").args(["--user", verb, "kcd.service"]).status().map_err(|e| e.to_string())?;
+            if status.success() { Ok(()) } else { Err(format!("systemctl {verb} kcd.service failed ({status})")) }
+        })
+    })
+}
+
 fn device_menu(d: &Device, pair_key: Option<&String>) -> MenuItem<Indicator> {
     let id = d.id.as_str();
     let none = Value::Null;
@@ -252,15 +262,7 @@ impl ksni::Tray for Indicator {
         let mut menu = Vec::new();
         if let Some(p) = &self.problem {
             menu.push(info(p));
-            menu.push(item(
-                "Start daemon",
-                "system-run",
-                Box::new(|_| {
-                    background(|| {
-                        Command::new("systemctl").args(["--user", "start", "kcd.service"]).status().map(drop).map_err(|e| e.to_string())
-                    })
-                }),
-            ));
+            menu.push(item("Start daemon", "system-run", systemctl("start")));
         } else {
             if self.devices.is_empty() {
                 menu.push(info("No devices found"));
@@ -268,6 +270,8 @@ impl ksni::Tray for Indicator {
             menu.extend(self.devices.iter().map(|d| device_menu(d, self.pair_keys.get(&d.id))));
         }
         menu.push(MenuItem::Separator);
+        // Recovers a session where the phone stays connected but its battery and notifications never arrive.
+        menu.push(item("Restart daemon", "view-refresh", systemctl("restart")));
         menu.push(item("Quit", "application-exit", Box::new(|_| std::process::exit(0))));
         menu
     }
