@@ -1,7 +1,7 @@
 # Maintainer: Rishabh672003
 # Packages the binary staged by build.sh; run that instead of makepkg directly.
 pkgname=kcd-indicator
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="System tray indicator and window for the kcd KDE Connect daemon"
 arch=('x86_64')
